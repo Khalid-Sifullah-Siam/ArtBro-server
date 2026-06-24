@@ -1,0 +1,11 @@
+# Installed packages can be restored with npm install
+node_modules/
+
+# Local environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Log files
+*.log
+

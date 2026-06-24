@@ -8,7 +8,7 @@ import { auth, database, mongoClient } from "./auth.js";
 const app = express();
 
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 const DB_NAME = process.env.DB_NAME || "arthub";
 const STRIPE_CURRENCY = process.env.STRIPE_CURRENCY || "usd";
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
@@ -17,10 +17,6 @@ const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
   .filter(Boolean);
 const DEFAULT_ADMIN_EMAIL = normalizeEmail(process.env.DEFAULT_ADMIN_EMAIL || ADMIN_EMAILS[0] || "");
 const DEFAULT_ADMIN_PASSWORD = process.env.DEFAULT_ADMIN_PASSWORD || "";
-const GOOGLE_CLIENT_ID =
-  process.env.GOOGLE_CLIENT_ID ||
-  "420966292257-drral0bq2dj7lmj9fet69fhq55kj75l1.apps.googleusercontent.com";
-
 const ROLES = ["user", "artist", "admin"];
 const SUBSCRIPTION_LIMITS = { free: 3, pro: 9, premium: Infinity };
 const SUBSCRIPTION_PRICES = { pro: 999, premium: 1999 };
@@ -33,7 +29,7 @@ app.use(
   cors({
     origin(origin, callback) {
       if (!origin || origin === CLIENT_URL) return callback(null, true);
-      return callback(null, true);
+      return callback(new Error("This website is not allowed by CORS"));
     },
     credentials: true,
   })
@@ -143,43 +139,6 @@ async function applyAdminEmailRole(user) {
     { $set: { role: "admin", updatedAt: new Date() } }
   );
   return { ...user, role: "admin" };
-}
-
-async function verifyGoogleCredential(credential) {
-  if (!GOOGLE_CLIENT_ID) {
-    const error = new Error("GOOGLE_CLIENT_ID is missing. Configure Google login on the server.");
-    error.status = 503;
-    throw error;
-  }
-  if (!credential) {
-    const error = new Error("Google credential is required");
-    error.status = 400;
-    throw error;
-  }
-
-  const response = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
-  const profile = await response.json();
-  if (!response.ok) {
-    const error = new Error(profile.error_description || "Google credential verification failed");
-    error.status = 401;
-    throw error;
-  }
-  if (profile.aud !== GOOGLE_CLIENT_ID) {
-    const error = new Error("Google credential audience does not match this app");
-    error.status = 401;
-    throw error;
-  }
-  if (profile.email_verified !== "true" && profile.email_verified !== true) {
-    const error = new Error("Google email is not verified");
-    error.status = 401;
-    throw error;
-  }
-
-  return {
-    email: profile.email,
-    name: profile.name || profile.email?.split("@")[0],
-    photoURL: profile.picture || "",
-  };
 }
 
 function publicUser(user) {
@@ -490,7 +449,9 @@ app.get("/api/health", asyncHandler(async (_req, res) => {
     ok: true,
     databaseConfigured: Boolean(process.env.MONGO_URI),
     stripeConfigured: Boolean(process.env.STRIPE_SECRET_KEY),
-    googleConfigured: Boolean(GOOGLE_CLIENT_ID),
+    googleConfigured: Boolean(
+      process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+    ),
     timestamp: new Date().toISOString(),
   });
 }));
@@ -508,6 +469,24 @@ app.patch("/api/users/me", requireAuth, asyncHandler(async (req, res) => {
   update.updatedAt = new Date();
 
   await collections().users.updateOne({ _id: req.user._id }, { $set: update });
+  const user = await collections().users.findOne({ _id: req.user._id });
+  res.json({ user: publicUser(user) });
+}));
+
+app.patch("/api/users/me/registration-role", requireAuth, asyncHandler(async (req, res) => {
+  if (req.body.role !== "artist") {
+    const error = new Error("Registration role must be artist");
+    error.status = 400;
+    throw error;
+  }
+
+  if (req.user.role === "user") {
+    await collections().users.updateOne(
+      { _id: req.user._id },
+      { $set: { role: "artist", updatedAt: new Date() } }
+    );
+  }
+
   const user = await collections().users.findOne({ _id: req.user._id });
   res.json({ user: publicUser(user) });
 }));

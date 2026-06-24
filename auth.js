@@ -8,6 +8,8 @@ const mongoClient = new MongoClient(process.env.MONGO_URI || "mongodb://localhos
 });
 
 const database = mongoClient.db(process.env.DB_NAME || "arthub");
+const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+const isProduction = process.env.NODE_ENV === "production";
 const adminEmails = (process.env.ADMIN_EMAILS || "")
   .split(",")
   .map((email) => email.trim().toLowerCase())
@@ -17,13 +19,24 @@ export const auth = betterAuth({
   appName: "ArtHub",
   baseURL: process.env.BETTER_AUTH_URL || "http://localhost:5000",
   secret: process.env.BETTER_AUTH_SECRET,
-  trustedOrigins: [process.env.CLIENT_URL || "http://localhost:3000"],
+  trustedOrigins: [clientUrl],
   database: mongodbAdapter(database, {
     client: mongoClient,
   }),
   emailAndPassword: {
     enabled: true,
     minPasswordLength: 8,
+  },
+  session: {
+    expiresIn: 60 * 60 * 24 * 7,
+    updateAge: 60 * 60 * 24,
+  },
+  advanced: {
+    defaultCookieAttributes: {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
+    },
   },
   socialProviders: process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
     ? {

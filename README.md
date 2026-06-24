@@ -104,15 +104,16 @@ Then update `.env` with your own credentials:
 ```env
 PORT=5000
 NODE_ENV=development
-CLIENT_URL=http://localhost:5173
+CLIENT_URL=http://localhost:3000
 MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net
 DB_NAME=arthub
 BETTER_AUTH_URL=http://localhost:5000
 BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
-ADMIN_EMAILS=admin@example.com
-DEFAULT_ADMIN_EMAIL=admin@example.com
+ADMIN_EMAILS=admin@arthub.com
+DEFAULT_ADMIN_EMAIL=admin@arthub.com
 DEFAULT_ADMIN_PASSWORD=replace-with-a-strong-password
 GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
 STRIPE_SECRET_KEY=sk_test_your_stripe_secret_key
 STRIPE_CURRENCY=usd
 ```
@@ -181,10 +182,11 @@ sends this cookie automatically after registration, login, or Google login.
 
 | Method | Endpoint | Access | Description |
 |---|---|---|---|
-| `POST` | `/api/auth/register` | Public | Register a user or artist |
-| `POST` | `/api/auth/login` | Public | Log in with email and password |
-| `POST` | `/api/auth/google` | Public | Log in with a Google credential |
-| `GET` | `/api/auth/me` | Private | Get the logged-in user |
+| `POST` | `/api/auth/sign-up/email` | Public | Register a user or artist |
+| `POST` | `/api/auth/sign-in/email` | Public | Log in with email and password |
+| `POST` | `/api/auth/sign-in/social` | Public | Start Google OAuth |
+| `GET` | `/api/auth/get-session` | Public | Get the current session |
+| `POST` | `/api/auth/sign-out` | Private | Log out |
 
 ### Users
 
@@ -192,6 +194,7 @@ sends this cookie automatically after registration, login, or Google login.
 |---|---|---|---|
 | `GET` | `/api/users/me` | Private | Get the current profile |
 | `PATCH` | `/api/users/me` | Private | Update the current profile |
+| `PATCH` | `/api/users/me/registration-role` | Private | Finish Google artist registration |
 | `PATCH` | `/api/users/me/password` | Private | Change the current password |
 | `GET` | `/api/users` | Admin | List users with search and pagination |
 | `PATCH` | `/api/users/:id/role` | Admin | Change a user's role |

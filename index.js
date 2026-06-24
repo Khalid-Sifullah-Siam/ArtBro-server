@@ -30,6 +30,7 @@ const ROLES = ["user", "artist", "admin"];
 const SUBSCRIPTION_LIMITS = { free: 3, pro: 9, premium: Infinity };
 const SUBSCRIPTION_PRICES = { pro: 999, premium: 1999 };
 
+
 let client;
 let db;
 

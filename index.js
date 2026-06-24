@@ -1155,7 +1155,7 @@ app.use((error, _req, res, _next) => {
 });
 
 process.on("SIGINT", async () => {
-  if (client) await client.close();
+  // if (client) await client.close();
   process.exit(0);
 });
 

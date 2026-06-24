@@ -1162,3 +1162,6 @@ process.on("SIGINT", async () => {
 app.listen(PORT, () => {
   console.log(`ArtHub API running on port ${PORT}`);
 });
+
+
+

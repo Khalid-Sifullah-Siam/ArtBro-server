@@ -1,20 +1,15 @@
-const express = require("express");
-const cors = require("cors");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const fs = require("fs");
-const path = require("path");
-const { MongoClient, ObjectId } = require("mongodb");
-
-loadEnvFile();
+import "./env.js";
+import express from "express";
+import cors from "cors";
+import { ObjectId } from "mongodb";
+import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
+import { auth, database, mongoClient } from "./auth.js";
 
 const app = express();
 
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
 const DB_NAME = process.env.DB_NAME || "arthub";
-const JWT_SECRET = process.env.JWT_SECRET || "development-only-change-me";
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 const STRIPE_CURRENCY = process.env.STRIPE_CURRENCY || "usd";
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
   .split(",")
@@ -30,31 +25,9 @@ const ROLES = ["user", "artist", "admin"];
 const SUBSCRIPTION_LIMITS = { free: 3, pro: 9, premium: Infinity };
 const SUBSCRIPTION_PRICES = { pro: 999, premium: 1999 };
 
-let client;
-let db;
-
-function loadEnvFile() {
-  const envPath = path.join(__dirname, ".env");
-  if (!fs.existsSync(envPath)) return;
-
-  const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
-  lines.forEach((line) => {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) return;
-    const equalsIndex = trimmed.indexOf("=");
-    if (equalsIndex === -1) return;
-
-    const key = trimmed.slice(0, equalsIndex).trim();
-    let value = trimmed.slice(equalsIndex + 1).trim();
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (key && process.env[key] === undefined) process.env[key] = value;
-  });
-}
+let client = mongoClient;
+let db = database;
+let databaseReady = false;
 
 app.use(
   cors({
@@ -65,11 +38,12 @@ app.use(
     credentials: true,
   })
 );
+app.all("/api/auth/*splat", toNodeHandler(auth));
 app.use(express.json({ limit: "2mb" }));
 
 function collections() {
   return {
-    users: db.collection("users"),
+    users: db.collection("user"),
     artworks: db.collection("artworks"),
     comments: db.collection("comments"),
     transactions: db.collection("transactions"),
@@ -77,18 +51,14 @@ function collections() {
 }
 
 async function connectDB() {
-  if (db) return db;
+  if (databaseReady) return db;
   if (!process.env.MONGO_URI) {
     throw new Error("MONGO_URI is missing. Add it to your environment.");
   }
-
-  client = new MongoClient(process.env.MONGO_URI, {
-    serverSelectionTimeoutMS: 8000,
-  });
-  // await client.connect();
-  db = client.db(DB_NAME);
+  await client.connect();
   await ensureIndexes();
   await ensureDefaultAdmin();
+  databaseReady = true;
   return db;
 }
 
@@ -115,30 +85,30 @@ async function ensureDefaultAdmin() {
 
   const { users } = collections();
   const now = new Date();
-  const passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 12);
   const existing = await users.findOne({ email: DEFAULT_ADMIN_EMAIL });
 
   if (!existing) {
-    await users.insertOne({
-      name: "ArtHub Admin",
-      email: DEFAULT_ADMIN_EMAIL,
-      passwordHash,
-      role: "admin",
-      photoURL: "",
-      subscriptionTier: "premium",
-      createdAt: now,
-      updatedAt: now,
+    await auth.api.signUpEmail({
+      body: {
+        name: "ArtHub Admin",
+        email: DEFAULT_ADMIN_EMAIL,
+        password: DEFAULT_ADMIN_PASSWORD,
+        role: "admin",
+        photoURL: "",
+      },
     });
-    return;
   }
 
-  const update = {
-    role: "admin",
-    passwordHash,
-    subscriptionTier: existing.subscriptionTier || "premium",
-    updatedAt: now,
-  };
-  await users.updateOne({ _id: existing._id }, { $set: update });
+  await users.updateOne(
+    { email: DEFAULT_ADMIN_EMAIL },
+    {
+      $set: {
+        role: "admin",
+        subscriptionTier: "premium",
+        updatedAt: now,
+      },
+    }
+  );
 }
 
 function asyncHandler(fn) {
@@ -214,44 +184,25 @@ async function verifyGoogleCredential(credential) {
 
 function publicUser(user) {
   if (!user) return null;
-  const { passwordHash, ...safeUser } = user;
-  return safeUser;
-}
-
-function signToken(user) {
-  return jwt.sign(
-    { id: String(user._id), email: user.email, role: user.role },
-    JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
-  );
+  return user;
 }
 
 async function loadUserFromToken(req, required = true) {
   await connectDB();
-  const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  const session = await auth.api.getSession({
+    headers: fromNodeHeaders(req.headers),
+  });
 
-  if (!token) {
+  if (!session?.user) {
     if (!required) return null;
     const error = new Error("Authentication required");
     error.status = 401;
     throw error;
   }
 
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const user = await collections().users.findOne({ _id: oid(payload.id) });
-    if (!user) {
-      const error = new Error("User not found");
-      error.status = 401;
-      throw error;
-    }
-    return user;
-  } catch (error) {
-    if (!error.status) error.status = 401;
-    if (!error.message || error.name === "JsonWebTokenError") error.message = "Invalid token";
-    throw error;
-  }
+  const userId = session.user.id;
+  const user = await collections().users.findOne({ _id: oid(userId) });
+  return user || { ...session.user, _id: oid(userId) };
 }
 
 function requireAuth(req, _res, next) {
@@ -544,93 +495,6 @@ app.get("/api/health", asyncHandler(async (_req, res) => {
   });
 }));
 
-app.post("/api/auth/register", asyncHandler(async (req, res) => {
-  await connectDB();
-  const { name, email, password, confirmPassword, role = "user", photoURL = "" } = req.body;
-  requireFields(req.body, ["name", "email", "password"]);
-  if (confirmPassword !== undefined && password !== confirmPassword) {
-    const error = new Error("Passwords do not match");
-    error.status = 400;
-    throw error;
-  }
-  if (!["user", "artist"].includes(role)) {
-    const error = new Error("Registration role must be user or artist");
-    error.status = 400;
-    throw error;
-  }
-
-  const normalizedEmail = normalizeEmail(email);
-  const existingUser = await collections().users.findOne({ email: normalizedEmail });
-  if (existingUser) {
-    const error = new Error("Email already registered");
-    error.status = 409;
-    throw error;
-  }
-
-  const passwordHash = await bcrypt.hash(password, 12);
-  const now = new Date();
-  const user = {
-    name: String(name).trim(),
-    email: normalizedEmail,
-    passwordHash,
-    role: isAdminEmail(normalizedEmail) ? "admin" : role,
-    photoURL,
-    subscriptionTier: "free",
-    createdAt: now,
-    updatedAt: now,
-  };
-  const result = await collections().users.insertOne(user);
-  const createdUser = { ...user, _id: result.insertedId };
-  res.status(201).json({ token: signToken(createdUser), user: publicUser(createdUser) });
-}));
-
-app.post("/api/auth/login", asyncHandler(async (req, res) => {
-  await connectDB();
-  const { email, password } = req.body;
-  requireFields(req.body, ["email", "password"]);
-
-  const user = await collections().users.findOne({ email: normalizeEmail(email) });
-  if (!user || !user.passwordHash || !(await bcrypt.compare(password, user.passwordHash))) {
-    const error = new Error("Invalid email or password");
-    error.status = 401;
-    throw error;
-  }
-  const safeUser = await applyAdminEmailRole(user);
-  res.json({ token: signToken(safeUser), user: publicUser(safeUser) });
-}));
-
-app.post("/api/auth/google", asyncHandler(async (req, res) => {
-  await connectDB();
-  const { role = "user" } = req.body;
-  const { email, name, photoURL = "" } = await verifyGoogleCredential(req.body.credential);
-  const normalizedEmail = normalizeEmail(email);
-
-  let user = await collections().users.findOne({ email: normalizedEmail });
-  if (!user) {
-    const now = new Date();
-    const safeRole = ["user", "artist"].includes(role) ? role : "user";
-    const newUser = {
-      name: name || normalizedEmail.split("@")[0],
-      email: normalizedEmail,
-      role: isAdminEmail(normalizedEmail) ? "admin" : safeRole,
-      photoURL,
-      subscriptionTier: "free",
-      provider: "google",
-      createdAt: now,
-      updatedAt: now,
-    };
-    const result = await collections().users.insertOne(newUser);
-    user = { ...newUser, _id: result.insertedId };
-  }
-
-  const safeUser = await applyAdminEmailRole(user);
-  res.json({ token: signToken(safeUser), user: publicUser(safeUser) });
-}));
-
-app.get("/api/auth/me", requireAuth, (req, res) => {
-  res.json({ user: publicUser(req.user) });
-});
-
 app.get("/api/users/me", requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
@@ -651,16 +515,14 @@ app.patch("/api/users/me", requireAuth, asyncHandler(async (req, res) => {
 app.patch("/api/users/me/password", requireAuth, asyncHandler(async (req, res) => {
   const { currentPassword, newPassword } = req.body;
   requireFields(req.body, ["currentPassword", "newPassword"]);
-  if (!req.user.passwordHash || !(await bcrypt.compare(currentPassword, req.user.passwordHash))) {
-    const error = new Error("Current password is incorrect");
-    error.status = 400;
-    throw error;
-  }
-
-  await collections().users.updateOne(
-    { _id: req.user._id },
-    { $set: { passwordHash: await bcrypt.hash(newPassword, 12), updatedAt: new Date() } }
-  );
+  await auth.api.changePassword({
+    headers: fromNodeHeaders(req.headers),
+    body: {
+      currentPassword,
+      newPassword,
+      revokeOtherSessions: true,
+    },
+  });
   res.json({ message: "Password updated" });
 }));
 

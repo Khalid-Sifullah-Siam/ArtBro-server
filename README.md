@@ -107,8 +107,8 @@ NODE_ENV=development
 CLIENT_URL=http://localhost:5173
 MONGO_URI=mongodb+srv://username:password@cluster.mongodb.net
 DB_NAME=arthub
-JWT_SECRET=replace-with-a-long-random-secret
-JWT_EXPIRES_IN=7d
+BETTER_AUTH_URL=http://localhost:5000
+BETTER_AUTH_SECRET=replace-with-at-least-32-random-characters
 ADMIN_EMAILS=admin@example.com
 DEFAULT_ADMIN_EMAIL=admin@example.com
 DEFAULT_ADMIN_PASSWORD=replace-with-a-strong-password
@@ -157,13 +157,8 @@ GET http://localhost:5000/api/health
 
 ## Authentication
 
-Protected routes require a JWT in the request header:
-
-```http
-Authorization: Bearer YOUR_JWT_TOKEN
-```
-
-Users receive a token after successful registration, email login, or Google login.
+Protected routes use Better Auth's default secure session cookie. The browser
+sends this cookie automatically after registration, login, or Google login.
 
 ### User Roles
 
@@ -279,7 +274,6 @@ curl -X POST http://localhost:5000/api/auth/register \
 ```bash
 curl -X POST http://localhost:5000/api/artworks \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -d '{
     "title": "Golden Evening",
     "description": "A warm landscape painting.",
